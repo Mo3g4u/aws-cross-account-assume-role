@@ -132,6 +132,8 @@ cd ../pattern-b-assume-role
 │   ├── 22-sigv4.md                   # 用語解説: SigV4 署名
 │   ├── 23-apigateway-rest-vs-http.md # 用語解説: REST API と HTTP API
 │   └── 90-troubleshooting.md         # トラブルシューティング
+├── articles/
+│   └── aws-cross-account-apigateway.md   # Zenn 記事の下書き
 ├── scripts/
 │   └── common.sh                 # 設定読み込み・PREFIX 解決・スタック名の組み立て
 ├── pattern-a-resource-policy/    # 方式A: REST API + リソースポリシー
@@ -150,3 +152,12 @@ cd ../pattern-b-assume-role
 
 - AWS SAM（IaC）
 - Python 3.12 / boto3・botocore・urllib3（すべて Lambda ランタイム同梱。追加パッケージなし）
+
+## 解説記事
+
+この検証内容を、AWS を触り始めた方向けに解説した記事の下書きを
+[`articles/aws-cross-account-apigateway.md`](articles/aws-cross-account-apigateway.md) に置いています。
+
+## ライセンス
+
+[MIT License](LICENSE)
