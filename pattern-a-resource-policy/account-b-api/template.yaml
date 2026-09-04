@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  [方式A / アカウントB] REST API + IAM 認証 + リソースポリシー。
+  アカウントAのLambda実行ロールからの execute-api:Invoke だけを許可する。
+
+Parameters:
+  CallerRoleArn:
+    Type: String
+    Description: >
+      アカウントA側 Lambda 実行ロールの ARN。
+      A スタックの出力 CallerRoleArn をそのまま渡す。
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 10
+    MemorySize: 256
+
+Resources:
+  # ---------------------------------------------------------------
+  # REST API 本体
+  #   DefaultAuthorizer: AWS_IAM  → 全メソッドで SigV4 署名を要求する
+  #   ResourcePolicy              → 「誰が呼べるか」をB側で明示する
+  #
+  #   クロスアカウントではこの ResourcePolicy と、A 側のアイデンティティ
+  #   ポリシーの【両方】が明示的 Allow でないと 403 になる。
+  #   https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-authorization-flow.html
+  # ---------------------------------------------------------------
+  CrossAccountApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "${AWS::StackName}"
+      StageName: prod
+      EndpointConfiguration: REGIONAL
+      Auth:
+        DefaultAuthorizer: AWS_IAM
+        ResourcePolicy:
+          CustomStatements:
+            - Effect: Allow
+              Principal:
+                AWS: !Ref CallerRoleArn
+              Action: execute-api:Invoke
+              # 簡略構文。保存時に API Gateway が完全な ARN に展開する。
+              # 検証を絞りたければ execute-api:/prod/POST/items のように書く。
+              Resource:
+                - execute-api:/prod/POST/items
+
+  # ---------------------------------------------------------------
+  # API のバックエンド。呼び出し元の identity をそのまま返す。
+  # ---------------------------------------------------------------
+  ItemsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-items"
+      CodeUri: src/
+      Handler: app.handler
+      Events:
+        PostItems:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CrossAccountApi
+            Path: /items
+            Method: post
+
+Outputs:
+  ApiId:
+    Description: REST API の ID
+    Value: !Ref CrossAccountApi
+  ApiEndpoint:
+    Description: A 側 Lambda の環境変数 API_ENDPOINT に設定する URL
+    Value: !Sub "https://${CrossAccountApi}.execute-api.${AWS::Region}.amazonaws.com/prod/items"
+  ApiInvokeArn:
+    Description: A 側 IAM ポリシーの Resource に設定する ARN
+    Value: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${CrossAccountApi}/prod/POST/items"

@@ -1,0 +1,105 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  [方式B / アカウントB] HTTP API + IAM 認証 と、アカウントA が引き受けるための IAM ロール。
+  HTTP API はリソースポリシー非対応のため、呼び出し元を B アカウント内の
+  principal にする（＝AssumeRole）以外にクロスアカウント IAM 認証の手段がない。
+
+Parameters:
+  CallerRoleArn:
+    Type: String
+    Description: >
+      アカウントA側 Lambda 実行ロールの ARN。信頼ポリシーの Principal に設定する。
+      IAM は信頼ポリシーの principal 実在性を検証するため、
+      このロールが【すでに存在している】必要がある。
+
+  ExternalId:
+    Type: String
+    Default: ""
+    Description: >
+      任意。第三者組織にロールを貸す場合の confused deputy 対策。
+      自社内アカウント間なら空のままでよい。
+
+Conditions:
+  HasExternalId: !Not [!Equals [!Ref ExternalId, ""]]
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 10
+    MemorySize: 256
+
+Resources:
+  # ---------------------------------------------------------------
+  # HTTP API
+  #   EnableIamAuthorizer + DefaultAuthorizer: AWS_IAM で SigV4 必須にする。
+  #   リソースポリシーは設定できない（HTTP API は非対応）。
+  #   https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-access-control-iam.html
+  # ---------------------------------------------------------------
+  CrossAccountHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      # スタック名を引き継ぐことで、同一アカウントを共有していても名前が衝突しない
+      Name: !Sub "${AWS::StackName}"
+      StageName: prod
+      Auth:
+        EnableIamAuthorizer: true
+        DefaultAuthorizer: AWS_IAM
+
+  # ---------------------------------------------------------------
+  # アカウントA に引き受けさせるロール（このパターンの中心）
+  #   信頼ポリシー : 誰が引き受けられるか  → A の Lambda 実行ロール
+  #   権限ポリシー : 引き受けた後に何ができるか → この HTTP API の Invoke
+  #
+  # 呼び出し元がこのロールになることで identity が B アカウント内に入り、
+  # リソースポリシーなしでもクロスアカウント呼び出しが成立する。
+  # ---------------------------------------------------------------
+  ApiCallerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: アカウントA の Lambda が引き受けて HTTP API を呼ぶためのロール
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref CallerRoleArn
+            Action: sts:AssumeRole
+            Condition: !If
+              - HasExternalId
+              - StringEquals:
+                  sts:ExternalId: !Ref ExternalId
+              - !Ref AWS::NoValue
+      Policies:
+        - PolicyName: InvokeHttpApi
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: execute-api:Invoke
+                Resource: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${CrossAccountHttpApi}/prod/POST/items"
+
+  ItemsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-items"
+      CodeUri: src/
+      Handler: app.handler
+      Events:
+        PostItems:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CrossAccountHttpApi
+            Path: /items
+            Method: POST
+
+Outputs:
+  ApiId:
+    Description: HTTP API の ID
+    Value: !Ref CrossAccountHttpApi
+  ApiEndpoint:
+    Description: A 側 Lambda の環境変数 API_ENDPOINT に設定する URL
+    Value: !Sub "https://${CrossAccountHttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod/items"
+  ApiCallerRoleArn:
+    Description: A 側 Lambda が AssumeRole する対象の ARN
+    Value: !GetAtt ApiCallerRole.Arn

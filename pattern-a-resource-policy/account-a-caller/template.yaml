@@ -1,0 +1,66 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  [方式A / アカウントA] 自分の Lambda 実行ロールの認証情報で SigV4 署名し、
+  アカウントB の REST API を直接呼び出す。AssumeRole は使わない。
+
+Parameters:
+  AccountBId:
+    Type: String
+    AllowedPattern: '^[0-9]{12}$'
+    Description: API 提供側（アカウントB）の AWS アカウント ID
+
+  ApiEndpoint:
+    Type: String
+    Default: ""
+    Description: >
+      B スタックの出力 ApiEndpoint。
+      1 回目のデプロイ時点では B が未作成なので空でよい（3 ステップ目で設定する）。
+
+  ApiInvokeArn:
+    Type: String
+    Default: ""
+    Description: >
+      B スタックの出力 ApiInvokeArn。
+      空の場合はアカウントB配下の execute-api 全体を許可する暫定権限になる。
+      3 ステップ目で実際の API ARN に絞り込む。
+
+Conditions:
+  HasApiInvokeArn: !Not [!Equals [!Ref ApiInvokeArn, ""]]
+
+Resources:
+  CallerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-caller"
+      CodeUri: src/
+      Handler: app.handler
+      Runtime: python3.12
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          API_ENDPOINT: !Ref ApiEndpoint
+          API_REGION: !Ref AWS::Region
+      # -----------------------------------------------------------
+      # A 側のアイデンティティポリシー。
+      # クロスアカウントでは B 側リソースポリシーとの【両方】が
+      # 明示的 Allow である必要がある。
+      # -----------------------------------------------------------
+      Policies:
+        - Statement:
+            - Sid: InvokeCrossAccountApi
+              Effect: Allow
+              Action: execute-api:Invoke
+              Resource: !If
+                - HasApiInvokeArn
+                - !Ref ApiInvokeArn
+                - !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AccountBId}:*/*/*/*"
+
+Outputs:
+  CallerRoleArn:
+    Description: B スタックの CallerRoleArn パラメータに渡す ARN
+    Value: !GetAtt CallerFunctionRole.Arn
+  CallerFunctionName:
+    Description: 動作確認で invoke する Lambda 関数名
+    Value: !Ref CallerFunction
