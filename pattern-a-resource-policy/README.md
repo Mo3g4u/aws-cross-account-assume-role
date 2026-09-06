@@ -96,20 +96,25 @@ sam deploy --stack-name takeuchi-xacct-a-caller \
 ```json
 {
   "statusCode": 200,
-  "endpoint": "https://xxxx.execute-api.ap-northeast-1.amazonaws.com/prod/items",
+  "endpoint": "https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/prod/items",
   "response": {
     "message": "アカウントBのAPIに到達しました",
     "pattern": "A: REST API + IAM authentication + resource policy",
     "caller": {
       "accountId": "111111111111",
-      "userArn": "arn:aws:sts::111111111111:assumed-role/takeuchi-xacct-a-caller-CallerFunctionRole-XXXX/takeuchi-xacct-a-caller-caller",
+      "userArn": "arn:aws:sts::111111111111:assumed-role/takeuchi-xacct-a-caller-CallerFunctionRole-XXXXXXXXXXXX/takeuchi-xacct-a-caller-caller",
       "caller": "AROAXXXXXXXXXXXXXXXXX:takeuchi-xacct-a-caller-caller",
-      "sourceIp": "..."
+      "sourceIp": "203.0.113.10"
     },
-    "receivedBody": { "message": "hello from account A", "requestId": "..." }
+    "receivedBody": {
+      "message": "hello from account A",
+      "requestId": "3a544d72-9b3e-4e20-a1d8-a0b35a5bc95a"
+    }
   }
 }
 ```
+
+`userArn` の末尾（`.../takeuchi-xacct-a-caller-caller`）が **Lambda 関数名そのもの**になっている点にも注目。明示的な `AssumeRole` を書いていないのに `assumed-role` 形式なのは、Lambda サービスが起動時に実行ロールを引き受けており、その `RoleSessionName` に関数名が入るため（→ [21-assume-role-sts.md §8](../docs/21-assume-role-sts.md#8-lambda-実行ロールも-assumerole-されている)）。
 
 **ここが方式A の特徴**: `caller.accountId` が **111111111111（アカウントA）**、`userArn` が **A 側の Lambda 実行ロール**になっている。B 側のログを見るだけで「どのアカウントの誰が呼んだか」がわかる。方式B ではここが B 側のロールに変わる（[比較検討ドキュメント §4](../docs/00-comparison.md#4-方式b-assumerole--sigv4) 参照）。
 

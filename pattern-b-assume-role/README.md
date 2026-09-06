@@ -113,19 +113,23 @@ sam deploy --stack-name takeuchi-xacct-b-caller \
 ```json
 {
   "statusCode": 200,
-  "endpoint": "https://xxxx.execute-api.ap-northeast-1.amazonaws.com/prod/items",
-  "assumedRoleArn": "arn:aws:iam::222222222222:role/takeuchi-xacct-b-api-ApiCallerRole-XXXX",
-  "roleSessionName": "takeuchi-xacct-b-caller-caller-1a2b3c4d",
+  "endpoint": "https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/prod/items",
+  "assumedRoleArn": "arn:aws:iam::222222222222:role/takeuchi-xacct-b-api-ApiCallerRole-XXXXXXXXXXXX",
+  "roleSessionName": "takeuchi-xacct-b-caller-caller-f99a253a",
   "credentialsFromCache": false,
   "response": {
     "message": "アカウントBのAPIに到達しました",
     "pattern": "B: HTTP API + IAM authentication via AssumeRole",
     "caller": {
       "accountId": "222222222222",
-      "userArn": "arn:aws:sts::222222222222:assumed-role/takeuchi-xacct-b-api-ApiCallerRole-XXXX/takeuchi-xacct-b-caller-caller-1a2b3c4d",
-      "callerId": "AROAYYYYYYYYYYYYYYYYY:takeuchi-xacct-b-caller-caller-1a2b3c4d"
+      "userArn": "arn:aws:sts::222222222222:assumed-role/takeuchi-xacct-b-api-ApiCallerRole-XXXXXXXXXXXX/takeuchi-xacct-b-caller-caller-f99a253a",
+      "callerId": "AROAXXXXXXXXXXXXXXXXX:takeuchi-xacct-b-caller-caller-f99a253a",
+      "sourceIp": "203.0.113.20"
     },
-    "receivedBody": { "message": "hello from account A", "requestId": "..." }
+    "receivedBody": {
+      "message": "hello from account A",
+      "requestId": "f99a253a-e5e4-4b2b-ba18-8b7659c9cc4c"
+    }
   }
 }
 ```

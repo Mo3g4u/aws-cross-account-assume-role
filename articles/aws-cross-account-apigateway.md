@@ -264,7 +264,9 @@ B 側の Lambda で「誰が呼んできたか」を返すようにしておい�
 {
   "caller": {
     "accountId": "111111111111",
-    "userArn": "arn:aws:sts::111111111111:assumed-role/CallerFunctionRole/..."
+    "userArn": "arn:aws:sts::111111111111:assumed-role/CallerFunctionRole-XXXX/takeuchi-xacct-a-caller-caller",
+    "caller": "AROAXXXXXXXXXXXXXXXXX:takeuchi-xacct-a-caller-caller",
+    "sourceIp": "203.0.113.10"
   }
 }
 ```
@@ -397,9 +399,14 @@ SigV4Auth(credentials, "execute-api", API_REGION).add_auth(request)
 
 ```json
 {
+  "assumedRoleArn": "arn:aws:iam::222222222222:role/ApiCallerRole-XXXX",
+  "roleSessionName": "takeuchi-xacct-b-caller-caller-f99a253a",
+  "credentialsFromCache": false,
   "caller": {
     "accountId": "222222222222",
-    "userArn": "arn:aws:sts::222222222222:assumed-role/ApiCallerRole/xacct-b-caller-1a2b3c4d"
+    "userArn": "arn:aws:sts::222222222222:assumed-role/ApiCallerRole-XXXX/takeuchi-xacct-b-caller-caller-f99a253a",
+    "callerId": "AROAXXXXXXXXXXXXXXXXX:takeuchi-xacct-b-caller-caller-f99a253a",
+    "sourceIp": "203.0.113.20"
   }
 }
 ```
@@ -432,7 +439,17 @@ SigV4Auth(credentials, "execute-api", API_REGION).add_auth(request)
 追跡手段は `RoleSessionName`（`userArn` の末尾に出る）と、B アカウントの CloudTrail の `AssumeRole` イベントの 2 つだけです。なので `RoleSessionName` を `session` みたいな適当な値にすると、後で追えなくなります。上のコードで関数名を入れているのはそのためです。
 :::
 
-ちなみに方式A の `userArn` も `assumed-role` 形式でしたが、あれは **Lambda サービスが関数の起動時に実行ロールを借りている**からです。つまり両方式の違いは「AssumeRole するかどうか」ではなく、**AssumeRole を 1 回で済ませるか 2 回連ねるか**なんですね。
+ちなみに HTTP API で IAM 認証を使った場合、呼び出し元の情報は **`requestContext.authorizer.iam`** に入ります。REST API の `requestContext.identity` とは場所が違うので、バックエンドのコードはそのまま流用できません。ここは公式ドキュメントのペイロード形式 2.0 のサンプルに `authorizer.jwt` の例しか載っていなくて確信が持てなかったので、`requestContext` を丸ごとログに出して実物を確認しました。
+
+```python
+# 方式A（REST API）
+event["requestContext"]["identity"]["userArn"]
+
+# 方式B（HTTP API）
+event["requestContext"]["authorizer"]["iam"]["userArn"]
+```
+
+ちなみに方式A の `userArn` も `assumed-role` 形式でしたが、あれは **Lambda サービスが関数の起動時に実行ロールを借りている**からです。実際、セッション名の部分が `takeuchi-xacct-a-caller-caller` という **Lambda 関数名そのもの**になっていました。つまり両方式の違いは「AssumeRole するかどうか」ではなく、**AssumeRole を 1 回で済ませるか 2 回連ねるか**なんですね。
 
 ```
 方式A: Lambdaサービス --借用--> A の実行ロール ------> B の API
