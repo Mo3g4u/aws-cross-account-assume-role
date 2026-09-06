@@ -10,9 +10,9 @@ published: false
 
 マルチアカウント構成で開発していると、「アカウント A の Lambda から、アカウント B の API Gateway を呼びたい」という要件がそのうち出てきます。
 
-で、素直に IAM ポリシーを書いて動かしてみたら、見事に 403 を踏みました。しかも A 側にちゃんと権限を付けたはずなのに消えてくれません。調べていくと、**同一アカウント内のときとは必要な条件が違う**ということがわかり、そこからようやく前に進めました。
+やり方は大きく 2 つあるのですが、**AWS 側の仕様によってどちらを使えるかがほぼ決まってしまう**ことがわかりました。この記事では、その仕様を整理したうえで、2 つの方式を AWS SAM で実際に組んでデプロイし、動作を確認した結果をまとめます。
 
-同じところで詰まる人はけっこういそうなので、実際に 2 パターン組んで動かしてみた記録をまとめます。AWS を触り始めたばかりのメンバーにも読んでもらえるように、前提知識のおさらいも挟んでいます。
+AWS を触り始めたばかりのメンバーにも読んでもらえるように、前提知識のおさらいも挟んでいます。
 
 検証に使ったコードはこちらに置いてあります。`./deploy.sh` 一発で両方式とも試せるようにしてあります。
 
@@ -29,6 +29,8 @@ https://github.com/Mo3g4u/aws-cross-account-assume-role
 
 - **REST API** で呼び出し元が固定 → **方式A（リソースポリシー）** がいちばんシンプル
 - **HTTP API** → **方式B（AssumeRole）一択**。仕様上ほかに手段がないです
+
+なお以降の話は **IAM 認証（SigV4）を使う前提**です。Lambda オーソライザーや JWT オーソライザーで独自トークンを検証する構成なら、そもそもアカウントの壁を IAM で越えないので今回の 2 つのルールは効いてきません。その代わり鍵やトークンの管理が自前になります。
 
 ---
 
@@ -115,9 +117,9 @@ API Gateway で「IAM 認証」を有効にするというのは、要するに*
 
 ---
 
-## つまずきポイント (1): クロスアカウントは「両側」の許可が必要
+## 押さえておくべき仕様 (1): クロスアカウントは「両側」の許可が必要
 
-最初にハマったのがこれです。**同一アカウント内かクロスアカウントかで、必要な条件が変わります。**
+**同一アカウント内かクロスアカウントかで、必要な条件が変わります。**
 
 ```
 【同一アカウント】どちらか一方の許可でOK
@@ -147,9 +149,9 @@ API Gateway で「IAM 認証」を有効にするというのは、要するに*
 
 B の管理者が勝手に「A の誰でもどうぞ」と決めても、A の管理者が許可しなければ A のリソースは動きません。逆も同じです。つまりこの AND は、**片方のアカウントが単独でアカウントの壁を越えられないようにするための保証**になっているわけですね。同一アカウント内なら管理者は 1 人なので、どちらかに書けば意思表示として十分、という設計だと理解しました。
 
-## つまずきポイント (2): HTTP API はリソースポリシーが使えない
+## 押さえておくべき仕様 (2): HTTP API はリソースポリシーが使えない
 
-もうひとつがこれです。API Gateway には **REST API** と **HTTP API** の 2 種類があるんですが、後者にはこういう制約があります。
+API Gateway には **REST API** と **HTTP API** の 2 種類があるんですが、後者にはこういう制約があります。
 
 > Resource policies aren't currently supported for HTTP APIs.
 > — [Control access to HTTP APIs with IAM authorization](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-access-control-iam.html)
@@ -158,7 +160,7 @@ B の管理者が勝手に「A の誰でもどうぞ」と決めても、A の�
 名前が紛らわしいんですが、**HTTP API は REST API の後継ではありません**。「REST API から機能を削って安く・速くしたもの」で、両者は併存しています。安いので新規は HTTP API で、というケースも多いと思います。
 :::
 
-つまずきポイント (1) と組み合わせると、詰みます。
+仕様 (1) と組み合わせると、こうなります。
 
 ```
 HTTP API では B 側にリソースポリシーを置けない
@@ -172,7 +174,7 @@ HTTP API では B 側にリソースポリシーを置けない
 AssumeRole が必須（＝方式B）
 ```
 
-というわけで、HTTP API を使っているなら方式B 一択になります。ここに気づかず REST API の記事を読みながら HTTP API でリソースポリシーを探して、しばらく無駄な時間を使いました。
+**HTTP API で IAM 認証を使うなら方式B 一択**、というのはここから来ています。
 
 ---
 
@@ -213,7 +215,7 @@ CrossAccountApi:
               - execute-api:/prod/POST/items
 ```
 
-`Resource` の `execute-api:/prod/POST/items` は簡略構文で、保存時に API Gateway がリージョン・アカウント ID・API ID を補って完全な ARN に展開してくれます。地味に便利でした。
+`Resource` の `execute-api:/prod/POST/items` は簡略構文で、保存時に API Gateway がリージョン・アカウント ID・API ID を補って完全な ARN に展開してくれます。
 
 ### A 側（呼び出す側）
 
@@ -226,7 +228,7 @@ Policies:
 ```
 
 :::message alert
-この ARN のアカウント ID は **API を持っている B 側**です。呼び出し元の A ではありません。ここ、自分も普通に間違えました。
+この ARN のアカウント ID は **API を持っている B 側**です。呼び出し元の A ではありません。間違えやすいところだと思います。
 :::
 
 ### Lambda のコード
@@ -256,9 +258,9 @@ def handler(event, context):
 
 `boto3` / `botocore` / `urllib3` はすべて Lambda の Python ランタイムに同梱されているので、追加パッケージのバンドルは不要でした。Lambda Layer を用意しなくていいのは楽ですね。
 
-### 動かしてみた
+### 動かした結果
 
-B 側の Lambda で「誰が呼んできたか」を返すようにしておいたところ、こうなりました。
+B 側の Lambda で「誰が呼んできたか」を返すようにして実行した結果です。
 
 ```json
 {
@@ -273,7 +275,11 @@ B 側の Lambda で「誰が呼んできたか」を返すようにしておい�
 
 **アカウント A のロールがそのまま届いています。** B 側のログを見るだけで「A のどのロールが呼んだか」がわかるので、これは方式A のけっこう大きな利点だなと思いました。
 
-ちなみに `userArn` が `iam` ではなく `sts` の `assumed-role` 形式になっているのは、実際にリクエストを出しているのが「ロールを借りた一時的なセッション」だからです。**ポリシーに書くのは `arn:aws:iam::111111111111:role/MyRole` の方**なので、ログで見た文字列をそのままコピペすると一致せずに 403 になります。これも一度やりました。
+`userArn` が `iam` ではなく `sts` の `assumed-role` 形式になっているのは、実際にリクエストを出しているのが「ロールを借りた一時的なセッション」だからです。
+
+:::message alert
+**ポリシーに書くのは `arn:aws:iam::111111111111:role/MyRole`（ロール本体）の方**です。ログに出る `assumed-role` 形式をそのままポリシーにコピーしても一致せず、403 になります。
+:::
 
 ---
 
@@ -338,7 +344,11 @@ ApiCallerRole:
               Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${CrossAccountHttpApi}/prod/POST/items"
 ```
 
-SAM の `EnableIamAuthorizer: true` は最初書き忘れていて、`DefaultAuthorizer: AWS_IAM` だけだと Transform でエラーになりました。この 2 行はセットです。
+SAM のドキュメントによると、`DefaultAuthorizer: AWS_IAM` は `EnableIamAuthorizer` が `true` のときにだけ指定できます。この 2 行はセットで書く必要があります。
+
+:::message alert
+ロールのポリシーは片方だけでは動きません。**信頼ポリシーだけ**ならロールは借りられるが API を呼ぶ権限がない、**権限ポリシーだけ**ならそもそも借りられない（`AccessDenied`）、という状態になります。
+:::
 
 ### A 側: 必要な権限は 1 つだけ
 
@@ -395,7 +405,7 @@ SigV4Auth(credentials, "execute-api", API_REGION).add_auth(request)
 あと、期限ぎりぎりまで使うと「取得時点では有効だったのに到達時には切れていた」が起きるので、数分のマージンを引いて取り直すようにしています（上のコードの `- 300`）。
 :::
 
-### 動かしてみた
+### 動かした結果
 
 ```json
 {
@@ -415,7 +425,7 @@ SigV4Auth(credentials, "execute-api", API_REGION).add_auth(request)
 
 ### なぜこれでリソースポリシーが要らないのか
 
-ここが腑に落ちたポイントでした。図にするとこうです。
+図にするとこうなります。
 
 ```
 【方式A】身元がアカウントの壁を越える
@@ -431,7 +441,7 @@ SigV4Auth(credentials, "execute-api", API_REGION).add_auth(request)
     → 同一アカウント判定 → B 側ロールの権限だけでOK → リソースポリシー不要
 ```
 
-**「壁を越える部分を `execute-api` から `sts:AssumeRole` に付け替えている」** と捉えると、一気にわかりやすくなりました。壁を越える箇所ではもちろんつまずきポイント (1) が適用されるので、AssumeRole には A 側の権限と B 側の信頼ポリシーの両方が必要です。
+**「壁を越える部分を `execute-api` から `sts:AssumeRole` に付け替えている」** と捉えると、一気にわかりやすくなりました。壁を越える箇所には当然 仕様 (1) が適用されるので、AssumeRole には A 側の権限と B 側の信頼ポリシーの両方が必要です。
 
 :::message
 方式B のトレードオフとして、**API に届くのが B 側のロールになるので「A 側の誰が呼んだか」が API のログからは直接わかりません。**
@@ -439,7 +449,11 @@ SigV4Auth(credentials, "execute-api", API_REGION).add_auth(request)
 追跡手段は `RoleSessionName`（`userArn` の末尾に出る）と、B アカウントの CloudTrail の `AssumeRole` イベントの 2 つだけです。なので `RoleSessionName` を `session` みたいな適当な値にすると、後で追えなくなります。上のコードで関数名を入れているのはそのためです。
 :::
 
-ちなみに HTTP API で IAM 認証を使った場合、呼び出し元の情報は **`requestContext.authorizer.iam`** に入ります。REST API の `requestContext.identity` とは場所が違うので、バックエンドのコードはそのまま流用できません。ここは公式ドキュメントのペイロード形式 2.0 のサンプルに `authorizer.jwt` の例しか載っていなくて確信が持てなかったので、`requestContext` を丸ごとログに出して実物を確認しました。
+### 実測で確認できたこと 2 つ
+
+**1. HTTP API と REST API では呼び出し元情報の場所が違う**
+
+HTTP API で IAM 認証を使った場合、呼び出し元の情報は **`requestContext.authorizer.iam`** に入ります。REST API の `requestContext.identity` とは場所が違うので、バックエンドのコードはそのまま流用できません。
 
 ```python
 # 方式A（REST API）
@@ -449,7 +463,19 @@ event["requestContext"]["identity"]["userArn"]
 event["requestContext"]["authorizer"]["iam"]["userArn"]
 ```
 
-ちなみに方式A の `userArn` も `assumed-role` 形式でしたが、あれは **Lambda サービスが関数の起動時に実行ロールを借りている**からです。実際、セッション名の部分が `takeuchi-xacct-a-caller-caller` という **Lambda 関数名そのもの**になっていました。つまり両方式の違いは「AssumeRole するかどうか」ではなく、**AssumeRole を 1 回で済ませるか 2 回連ねるか**なんですね。
+公式ドキュメントのペイロード形式 2.0 のサンプルには `authorizer.jwt` の例しか載っておらず `authorizer.iam` の構造が確認できなかったので、`requestContext` を丸ごと CloudWatch Logs に出して実物を確認しました。`accountId` / `userArn` / `callerId` がそれぞれ値を持っていました。
+
+**2. 方式A も裏では AssumeRole されている**
+
+方式A の `userArn` も `assumed-role` 形式でしたが、これは **Lambda サービスが関数の起動時に実行ロールを借りている**ためです。実際、セッション名の部分が **Lambda 関数名そのもの**になっていました。
+
+```
+arn:aws:sts::111111111111:assumed-role/CallerFunctionRole-XXXX/takeuchi-xacct-a-caller-caller
+                                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                                                               Lambda 関数名
+```
+
+つまり両方式の違いは「AssumeRole するかどうか」ではなく、**AssumeRole を 1 回で済ませるか 2 回連ねるか**でした。
 
 ```
 方式A: Lambdaサービス --借用--> A の実行ロール ------> B の API
@@ -457,17 +483,17 @@ event["requestContext"]["authorizer"]["iam"]["userArn"]
                                                 +-- ここを足しただけ --+
 ```
 
-この見方をすると、方式B で一時認証情報の有効期間が最大 1 時間に制限される理由（ロールを連ねる「ロールチェーン」の制約）も自然に理解できました。
+この見方をすると、方式B で一時認証情報の有効期間が最大 1 時間に制限される理由（[ロールチェーンの制約](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_use_switch-role-console.html)）も理解しやすくなります。
 
 ---
 
-## その他につまずいたところ
+## 実際に踏んだデプロイエラー 3 件
 
-上の 2 つ以外にも地味に時間を溶かしたポイントがあったので、まとめておきます。
+どれも `sam validate` では検出できず、実際にデプロイして初めて出たものです。
 
-### つまずき: そもそもデプロイが通らない（`Caller provided credentials not allowed`）
+### 1. `Caller provided credentials not allowed when resource policy is set`
 
-方式A を最初にデプロイしたとき、`AWS::ApiGateway::Deployment` の作成でいきなり落ちました。
+方式A の B 側スタックが、`AWS::ApiGateway::Deployment` の作成で失敗しました。
 
 ```
 CREATE_FAILED  AWS::ApiGateway::Deployment  CrossAccountApiDeployment...
@@ -475,18 +501,18 @@ CREATE_FAILED  AWS::ApiGateway::Deployment  CrossAccountApiDeployment...
   when resource policy is set (Service: ApiGateway, Status Code: 400 ...)"
 ```
 
-メッセージだけ見ても何のことかわからなかったので、SAM が生成した CloudFormation テンプレートを覗いてみたところ、統合設定にこんなものが入っていました。
+SAM が生成した CloudFormation テンプレートを確認したところ、統合設定にこれが入っていました。
 
 ```json
 "x-amazon-apigateway-integration": {
   "type": "aws_proxy",
-  "credentials": "arn:aws:iam::*:user/*"     // ← これ
+  "credentials": "arn:aws:iam::*:user/*"
 }
 ```
 
-調べてみると、SAM は `AWS::Serverless::Api` に `Auth` を指定すると、`InvokeRole` の既定値 `CALLER_CREDENTIALS` を統合に適用する仕様でした。一方 API Gateway 側は「リソースポリシーがある API で、統合に呼び出し元の認証情報を使う」ことを許可していないので、この 2 つが噛み合わずに落ちていたわけです。
+SAM は `AWS::Serverless::Api` に `Auth` を指定すると、[`InvokeRole` の既定値 `CALLER_CREDENTIALS`](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-property-api-apiauth.html) を統合に適用します。一方 API Gateway は「リソースポリシーがある API で、統合に呼び出し元の認証情報を使う」ことを許可していないため、この 2 つが噛み合わずに失敗していました。
 
-対処は `InvokeRole: NONE` を明示するだけでした。
+対処は `InvokeRole: NONE` を明示するだけです。
 
 ```yaml
 Auth:
@@ -496,13 +522,13 @@ Auth:
     CustomStatements: [...]
 ```
 
-Lambda プロキシ統合の呼び出し許可は `AWS::Lambda::Permission`（SAM が自動で作ってくれる）の側で付くので、統合に認証情報は要りません。`NONE` が意味的にも正しいですね。
+Lambda プロキシ統合の呼び出し許可は `AWS::Lambda::Permission`（SAM が自動生成）の側で付くので、統合に認証情報は不要です。`NONE` が意味的にも正しい設定でした。
 
-ちなみに **HTTP API（方式B）ではこの問題は起きません**。`AWS::Serverless::HttpApi` には `InvokeRole` 相当の設定がないので、統合に `credentials` が入らないためです。
+**HTTP API（方式B）ではこの問題は起きません。** `AWS::Serverless::HttpApi` には `InvokeRole` 相当の設定がなく、統合に `credentials` が入らないためです。
 
-### つまずき: IAM ロールの説明に日本語を書いたら怒られた
+### 2. IAM ロールの `Description` に日本語が使えない
 
-方式B のデプロイで、`AWS::IAM::Role` の作成がこれで落ちました。
+方式B の `AWS::IAM::Role` の作成で失敗しました。
 
 ```
 1 validation error detected: Value at 'description' failed to satisfy constraint:
@@ -510,7 +536,7 @@ Member must satisfy regular expression pattern:
 [\u0009\u000A\u000D\u0020-\u007E\u00A1-\u00FF]*
 ```
 
-正規表現をよく見ると、許されているのはタブ・改行・復帰と `\u0020-\u007E`（印字可能 ASCII）、`\u00A1-\u00FF`（Latin-1 補助）だけでした。つまり **IAM の `Description` に日本語は入れられない**ということですね。
+正規表現が許しているのは、タブ・改行・復帰と `\u0020-\u007E`（印字可能 ASCII）、`\u00A1-\u00FF`（Latin-1 補助）だけです。つまり **IAM の `Description` に日本語は入れられません**。
 
 ```yaml
 ApiCallerRole:
@@ -519,81 +545,88 @@ ApiCallerRole:
     Description: アカウントA の Lambda が引き受けるためのロール   # ← これがダメ
 ```
 
-説明は英語にして、日本語は YAML のコメントに逃がすことで解決しました。
+説明を英語にして、日本語は YAML のコメントに逃がすことで解決しました。
 
-ちなみに同じ `Description:` でも、**AWS リソースのプロパティなのか CloudFormation のメタデータなのか**で扱いが違います。ここを整理できていなかったのが敗因でした。
+同じ `Description:` でも、**AWS リソースのプロパティなのか CloudFormation のメタデータなのか**で扱いが違います。
 
 | 場所 | 日本語 |
 |---|---|
 | `Resources.*.Properties.Description`（IAM ロール等） | ❌ サービス側の文字種制約を受ける |
 | テンプレート冒頭 / `Parameters` / `Outputs` の `Description` | ✅ CloudFormation のメタデータなので OK |
 
-なお `Outputs` の `Description` は CloudFormation 上は日本語で通るんですが、**SAM CLI がデプロイ後に表示する表で文字化けします**。
+なお `Outputs` の `Description` は CloudFormation 上は日本語で通りますが、**SAM CLI がデプロイ後に表示する表で文字化けしました**。
 
 ```
 Key                 CallerRoleArn
-Description         B ????? CallerRoleArn ???????? ARN     ← 読めない
+Description         B ????? CallerRoleArn ???????? ARN
 ```
 
 デプロイ結果の値を読む場所なので、ここも ASCII に統一しました。
 
-### つまずき: 失敗したスタックが消せずに再デプロイできない
+### 3. 失敗したスタックがそのままでは作り直せない
 
-上のエラーでスタックが `ROLLBACK_COMPLETE` になったあと、そのまま再実行したら今度はこう言われました。
+上のエラーでスタックが `ROLLBACK_COMPLETE` になったあと、再実行するとこうなりました。
 
 ```
 Stack ... is in ROLLBACK_COMPLETE state and can not be updated.
 ```
 
-**CREATE に失敗したスタックはそのままでは作り直せない**という CloudFormation の仕様でした。いったん削除してから作り直す必要があります。
+**CREATE に失敗したスタックはそのままでは作り直せない**という CloudFormation の仕様です。いったん削除してから作り直す必要があります。
 
 ```bash
 aws cloudformation delete-stack --stack-name <スタック名> --profile <profile>
 aws cloudformation wait stack-delete-complete --stack-name <スタック名> --profile <profile>
 ```
 
-検証を何度も回すことになるので、`deploy.sh` の側でこの状態を検出して自動で削除してから進むようにしました。
+検証を何度も回すので、`deploy.sh` 側でこの状態を検出して自動で削除してから進むようにしました。
 
-### つまずき: リソースポリシーを変えたのに 403 のまま
+---
 
-**REST API のリソースポリシーは、変更しただけでは反映されません。** ステージへのデプロイが必要です。マネコンで直接編集したときに特にハマりました。
+## 今回は遭遇しなかったが、知っておくと切り分けが早い点
+
+デプロイ時には踏みませんでしたが、ドキュメントを読む限り詰まりやすそうな点をまとめておきます。
+
+### リソースポリシーは変更しただけでは反映されない
+
+REST API のリソースポリシーを更新した場合、**ステージへのデプロイが必要**です。
+
+> If you update the resource policy after the API is created, you'll need to deploy the API to propagate the changes after you've attached the updated policy. Updating or saving the policy alone won't change the runtime.
+> — [Create and attach an API Gateway resource policy](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-resource-policies-create-attach.html)
 
 ```bash
 aws apigateway create-deployment --rest-api-id <API_ID> --stage-name prod
 ```
 
-ちなみに **HTTP API は自動デプロイ**なので、この問題自体が起きません。地味にうれしい差だなと思いました。
+**HTTP API は自動デプロイ**なので、この問題自体が起きません。
 
-### つまずき: `Missing Authentication Token` が出る
+### `Missing Authentication Token` は認証の話ではない
 
-これ、**認証情報がないという意味ではありません**。ほとんどの場合、**そのパス/メソッドのルートが存在しない**だけです。メッセージに引っ張られて IAM を見直し続けていたんですが、ステージ名を付け忘れていただけでした。まず URL を疑うのが正解です。
+REST API でこのメッセージが返るのは、[URI が認識できなかったとき](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-cli-troubleshooting.html)です。認証情報がないという意味ではありません。パス・メソッド・ステージ名を疑うのが先です。
 
-HTTP API の場合は、同じ状況で `{"message":"Forbidden"}` が返ります。
+HTTP API の場合は、ルートにもステージにも一致しないと [`{"message":"Not Found"}`](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-routes.html) が返ります。HTTP API の `Forbidden` は認可の失敗で返るもので、こちらとは別物です。
 
-### つまずき: `MalformedPolicyDocument: Invalid principal in policy`
+### ロールを作り直すとポリシーが壊れる
 
-IAM ロールの**信頼ポリシーに、実在しないロール ARN を書いている**と出ます。IAM は信頼ポリシーの principal が実在するかを検証しているんですね。
-
-方式B で「B のスタックから先に作ろう」とすると必ずこれになります。**A 側（＝ Lambda 実行ロール）を先に作る必要があります。**
-
-そもそもクロスアカウント構成には循環参照があって、B 側のポリシーは「A のロール ARN」を知りたいし、A 側の Lambda は「B のエンドポイント」を知りたい、という状態になります。今回は `A → B → A（再デプロイ）` の 3 ステップに分けるスクリプトを用意して解決しました。
-
-### つまずき: ロールを作り直したら急に 403 になった
-
-ポリシーに書いたロール ARN は、保存時に内部の一意 ID（`AROA...`）に変換されて保持されるそうです。なので**同名で作り直すと ID が変わって、参照している側のポリシーが壊れます**。
+ポリシーに書いたロール ARN は、[保存時に内部の一意 ID（`AROA...`）に変換](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_principal.html)されます。そのため**同名で作り直すと ID が変わり、参照している側のポリシーが壊れます**。
 
 ポリシーの JSON を見て `Principal` が ARN ではなく `AROAXXXX...` になっていたらこれです。参照側のポリシーを保存し直せば直ります。
 
-### 切り分けのコツ: 署名の失敗か、認可の失敗か
+### 循環参照になるのでデプロイ順序が固定される
 
-403 が返ったとき、**まずこの 2 つを切り分ける**と早いです。
+B 側のポリシーは「A のロール ARN」を知りたいし、A 側の Lambda は「B のエンドポイント」を知りたい、という循環があります。
+
+さらに **IAM は信頼ポリシーの principal が実在するか検証する**ため、A のロールが存在しない状態で B をデプロイすると `MalformedPolicyDocument: Invalid principal in policy` になります。
+
+今回は `A → B → A（再デプロイ）` の 3 ステップに分けるスクリプトを用意して解決しました。
+
+### 403 が出たら「署名の失敗」か「認可の失敗」かを切り分ける
 
 - `SignatureDoesNotMatch` → **署名の失敗**。リージョンやホスト名を疑う
-- `is not authorized to perform: execute-api:Invoke` → **署名は成功している**。問題は IAM ポリシー側
+- `is not authorized to perform: execute-api:Invoke` → **署名は成功している**。IAM ポリシー側の問題
 
-署名エラーでよくある原因はこのあたりでした。
+署名エラーの原因になりやすいのは以下です。署名対象にメソッド・URL・ヘッダー・ボディがすべて含まれるためです。
 
-- 署名した**後**に URL・ヘッダー・ボディを変更した（全部署名対象なので壊れる）
+- 署名した**後**に URL・ヘッダー・ボディを変更した
 - 署名時のリージョンを A 側にしていた（正しくは **B 側 API のリージョン**）
 - HTTP クライアントがリダイレクトを自動追従した（転送先でホスト名が変わる）
 
@@ -639,6 +672,7 @@ IAM ロールの**信頼ポリシーに、実在しないロール ARN を書い
 
 - **Private API は試していない**: インターネットに出したくない要件がある場合、REST API の Private エンドポイント + VPC エンドポイントを併用することになります。ただし Lambda を VPC に置く必要が出てくるので、NAT やコールドスタートの考慮が別途必要です
 - **エラーハンドリングは最小限**: 検証コードは正常系だけ通しています。実際にはリトライやタイムアウトの設計が要ります
+- **レイテンシは計測していない**: AssumeRole 分のオーバーヘッドがどの程度かは測っていません。定量的に比較したい場合は別途計測が必要です
 - **`ExternalId` は任意扱い**: 自社内アカウント間なら不要ですが、第三者組織にロールを貸す場合は confused deputy 対策として必須と考えていいと思います。検証コードではパラメータで有効化できるようにしてあります
 - **CloudFormation の自動生成名の切り詰め**: プレフィックスを長くすると IAM ロール名が 64 文字を超えて切り詰められるはずですが、そこまでは実測していません
 
@@ -648,6 +682,7 @@ IAM ロールの**信頼ポリシーに、実在しないロール ARN を書い
 - **HTTP API はリソースポリシー非対応**。なのでクロスアカウントでは AssumeRole が必須になる
 - **方式A** は身元がそのまま届くので追跡が楽。**方式B** は権限を B 側に集約できて横展開が効く
 - 迷ったら方式B。ただし `RoleSessionName` は必ず意味のある値にしておく
+- デプロイして初めて出るエラーが 3 件あった。`sam validate` が通っても安心はできない
 
 検証に使ったコードは GitHub に置いてあるので、よかったら手元でも試してみてください。両方デプロイして `invoke.sh` の結果を見比べると、`caller.accountId` が A になるか B になるかで違いが一発でわかると思います。
 
@@ -667,7 +702,7 @@ cd pattern-a-resource-policy
 
 リポジトリには記事で触れなかった内容（IAM の権限評価ロジック、SigV4 署名の中身、REST API と HTTP API の機能比較）もドキュメントとして置いてあります。
 
-「なんとなく IAM を書いて動かない」状態から抜けるには、**今どちら側の許可が足りないのかを切り分けられること**が一番効くなというのが今回の学びでした。参考になれば幸いです！
+参考になれば幸いです！
 
 ## 参考リンク
 

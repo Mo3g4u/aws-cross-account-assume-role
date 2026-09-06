@@ -154,9 +154,14 @@ SAM/CloudFormation 経由なら通常は自動でデプロイが作られるが�
 
 ---
 
-## `{"message":"Forbidden"}`（HTTP API）
+## `{"message":"Not Found"}`（HTTP API）
 
-HTTP API でルートが見つからない場合はこのメッセージになる。REST API の `Missing Authentication Token` に相当する。やはりパス・ステージ・メソッドを確認する。
+HTTP API でルートにもステージにも一致しなかった場合はこのメッセージになる。REST API の `Missing Authentication Token` に相当する。やはりパス・ステージ・メソッドを確認する。
+
+> If no routes match a request, API Gateway returns `{"message":"Not Found"}` to the client.
+> — [Create routes for HTTP APIs in API Gateway](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-routes.html)
+
+なお HTTP API の `{"message":"Forbidden"}` は**認可の失敗**（IAM 認証で権限が足りない、実行 API エンドポイントが無効化されている等）で返るもので、ルート不一致とは別物。
 
 ---
 
