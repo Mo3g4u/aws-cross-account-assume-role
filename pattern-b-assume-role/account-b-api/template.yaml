@@ -57,7 +57,13 @@ Resources:
   ApiCallerRole:
     Type: AWS::IAM::Role
     Properties:
-      Description: アカウントA の Lambda が引き受けて HTTP API を呼ぶためのロール
+      # IAM の Description は ASCII / Latin-1 しか受け付けない。
+      # 許容される文字集合は [\u0009\u000A\u000D\u0020-\u007E\u00A1-\u00FF] で、
+      # 日本語を入れると作成時に次のエラーで失敗する。
+      #   1 validation error detected: Value at 'description' failed to satisfy
+      #   constraint: Member must satisfy regular expression pattern: ...
+      # （日本語の説明: アカウントA の Lambda が引き受けて HTTP API を呼ぶためのロール）
+      Description: Role assumed by the Lambda in account A to invoke this HTTP API
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -95,11 +101,14 @@ Resources:
 
 Outputs:
   ApiId:
-    Description: HTTP API の ID
+    # HTTP API の ID
+    Description: HTTP API ID
     Value: !Ref CrossAccountHttpApi
   ApiEndpoint:
-    Description: A 側 Lambda の環境変数 API_ENDPOINT に設定する URL
+    # A 側 Lambda の環境変数 API_ENDPOINT に設定する URL
+    Description: Set this URL as API_ENDPOINT on the account A Lambda
     Value: !Sub "https://${CrossAccountHttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod/items"
   ApiCallerRoleArn:
-    Description: A 側 Lambda が AssumeRole する対象の ARN
+    # A 側 Lambda が AssumeRole する対象の ARN
+    Description: Role ARN that the account A Lambda assumes
     Value: !GetAtt ApiCallerRole.Arn

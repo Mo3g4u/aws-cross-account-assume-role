@@ -35,6 +35,14 @@ Resources:
       EndpointConfiguration: REGIONAL
       Auth:
         DefaultAuthorizer: AWS_IAM
+        # SAM は Auth を指定すると統合の credentials に CALLER_CREDENTIALS
+        # （arn:aws:iam::*:user/*）を既定で埋め込む。しかし API Gateway は
+        # 「リソースポリシーがある API で呼び出し元の認証情報を統合に使う」ことを
+        # 許可しておらず、デプロイ時に次のエラーで失敗する。
+        #   Caller provided credentials not allowed when resource policy is set
+        # Lambda プロキシ統合の呼び出し許可は AWS::Lambda::Permission 側で
+        # 付与されるため、ここは NONE が正しい。
+        InvokeRole: NONE
         ResourcePolicy:
           CustomStatements:
             - Effect: Allow
@@ -65,11 +73,14 @@ Resources:
 
 Outputs:
   ApiId:
-    Description: REST API の ID
+    # REST API の ID
+    Description: REST API ID
     Value: !Ref CrossAccountApi
   ApiEndpoint:
-    Description: A 側 Lambda の環境変数 API_ENDPOINT に設定する URL
+    # A 側 Lambda の環境変数 API_ENDPOINT に設定する URL
+    Description: Set this URL as API_ENDPOINT on the account A Lambda
     Value: !Sub "https://${CrossAccountApi}.execute-api.${AWS::Region}.amazonaws.com/prod/items"
   ApiInvokeArn:
-    Description: A 側 IAM ポリシーの Resource に設定する ARN
+    # A 側 IAM ポリシーの Resource に設定する ARN
+    Description: Set this ARN as Resource in the account A IAM policy
     Value: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${CrossAccountApi}/prod/POST/items"

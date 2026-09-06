@@ -59,8 +59,10 @@ Resources:
 
 Outputs:
   CallerRoleArn:
-    Description: B スタックの CallerRoleArn パラメータに渡す ARN
+    # B スタックの CallerRoleArn パラメータに渡す ARN
+    Description: Pass this ARN to the B stack CallerRoleArn parameter
     Value: !GetAtt CallerFunctionRole.Arn
   CallerFunctionName:
-    Description: 動作確認で invoke する Lambda 関数名
+    # 動作確認で invoke する Lambda 関数名
+    Description: Lambda function name to invoke for testing
     Value: !Ref CallerFunction

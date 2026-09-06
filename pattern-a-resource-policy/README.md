@@ -122,6 +122,7 @@ sam deploy --stack-name takeuchi-xacct-a-caller \
 ```yaml
 Auth:
   DefaultAuthorizer: AWS_IAM
+  InvokeRole: NONE
   ResourcePolicy:
     CustomStatements:
       - Effect: Allow
@@ -133,8 +134,29 @@ Auth:
 ```
 
 - `DefaultAuthorizer: AWS_IAM` で全メソッドが SigV4 署名必須になる
+- **`InvokeRole: NONE` は必須**。これがないとデプロイ自体が失敗する（下記）
 - `Resource` の `execute-api:/prod/POST/items` は**簡略構文**。保存時に API Gateway がリージョン・アカウント ID・API ID を補って完全な ARN に展開する。全体を許可するなら `execute-api:/*`
 - `Principal` にはロール ARN（`arn:aws:iam::...:role/...`）を書く。届く identity は `assumed-role` 形式（`arn:aws:sts::...:assumed-role/...`）だが、ポリシーに書くのは **role ARN の方**
+
+
+#### なぜ `InvokeRole: NONE` が要るのか
+
+SAM は `Auth` を指定すると、`InvokeRole` の既定値 `CALLER_CREDENTIALS` を統合設定に適用する。
+
+```json
+"x-amazon-apigateway-integration": {
+  "type": "aws_proxy",
+  "credentials": "arn:aws:iam::*:user/*"
+}
+```
+
+ところが API Gateway は「リソースポリシーがある API で、統合に呼び出し元の認証情報を使う」ことを許可していないため、`AWS::ApiGateway::Deployment` の作成でこう落ちる。
+
+```
+Caller provided credentials not allowed when resource policy is set
+```
+
+Lambda プロキシ統合の呼び出し許可は `AWS::Lambda::Permission`（SAM が自動生成）で付与されるので、統合側に認証情報は不要。`NONE` が意味的にも正しい。
 
 ### 4.2 A 側: アイデンティティポリシー
 

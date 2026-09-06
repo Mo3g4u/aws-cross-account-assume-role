@@ -15,6 +15,7 @@ print_banner "方式A: REST API + リソースポリシー をデプロイ"
 deploy() {
   local dir="$1" stack="$2" profile="$3"
   shift 3
+  ensure_deployable "$stack" "$profile"
   ( cd "$dir" && sam deploy \
       --stack-name "$stack" \
       --profile "$profile" \

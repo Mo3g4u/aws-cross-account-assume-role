@@ -37,6 +37,95 @@ aws iam list-role-policies --role-name <ROLE_NAME> --profile account-a
 
 ---
 
+## デプロイ失敗: `Caller provided credentials not allowed when resource policy is set`
+
+方式A の B 側スタックが `AWS::ApiGateway::Deployment` の作成で失敗する。
+
+```
+CREATE_FAILED  AWS::ApiGateway::Deployment  CrossAccountApiDeployment...
+  Resource handler returned message: "Caller provided credentials not allowed
+  when resource policy is set (Service: ApiGateway, Status Code: 400 ...)"
+```
+
+**原因**: SAM は `AWS::Serverless::Api` に `Auth` を指定すると、[ApiAuth の `InvokeRole`](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-property-api-apiauth.html) の既定値 `CALLER_CREDENTIALS` を適用し、統合設定に次を埋め込む。
+
+```json
+"x-amazon-apigateway-integration": {
+  "type": "aws_proxy",
+  "credentials": "arn:aws:iam::*:user/*"     // ← これ
+}
+```
+
+しかし API Gateway は「リソースポリシーが設定された API で、統合に呼び出し元の認証情報を使う」ことを許可していないため、デプロイ時に弾かれる。
+
+**対処**: `Auth` に `InvokeRole: NONE` を明示する。
+
+```yaml
+Auth:
+  DefaultAuthorizer: AWS_IAM
+  InvokeRole: NONE          # ← 追加
+  ResourcePolicy:
+    CustomStatements: [...]
+```
+
+Lambda プロキシ統合の呼び出し許可は `AWS::Lambda::Permission`（SAM が自動生成する）で付与されるため、統合側に認証情報は不要。`NONE` が意味的にも正しい。
+
+なお **HTTP API（方式B）ではこの問題は起きない**。`AWS::Serverless::HttpApi` に `InvokeRole` 相当の設定がなく、統合に `credentials` が入らないため。
+
+## デプロイ失敗: `Value at 'description' failed to satisfy constraint`
+
+`AWS::IAM::Role` の作成でこう落ちる。
+
+```
+1 validation error detected: Value at 'description' failed to satisfy constraint:
+Member must satisfy regular expression pattern:
+[\u0009\u000A\u000D\u0020-\u007E\u00A1-\u00FF]*
+```
+
+**原因**: IAM の `Description` は **ASCII / Latin-1 しか受け付けない**。正規表現が示す許容範囲はタブ・改行・復帰と `\u0020-\u007E`（印字可能 ASCII）、`\u00A1-\u00FF`（Latin-1 補助）のみで、**日本語は範囲外**。
+
+**対処**: 説明は英語（ASCII）で書き、日本語は YAML コメントに置く。
+
+```yaml
+ApiCallerRole:
+  Type: AWS::IAM::Role
+  Properties:
+    # 日本語の説明はコメントに置く
+    Description: Role assumed by the Lambda in account A to invoke this HTTP API
+```
+
+### どの Description が制約を受けるか
+
+同じ `Description:` でも、**AWS リソースのプロパティか、CloudFormation のメタデータか**で扱いが違う。
+
+| 場所 | 日本語 | 備考 |
+|---|---|---|
+| `Resources.*.Properties.Description`（IAM ロール等） | **✗ 不可** | サービス側の文字種制約を受ける |
+| テンプレート冒頭の `Description` | ✓ | CloudFormation のメタデータ |
+| `Parameters.*.Description` | ✓ | 同上 |
+| `Outputs.*.Description` | ✓（ただし後述） | 同上 |
+
+`Outputs` の `Description` は CloudFormation 上は日本語で問題ないが、**SAM CLI がデプロイ後に表示する表で文字化けする**（`B ????? CallerRoleArn ???????? ARN` のようになる）。デプロイ結果を読む場所なので、本リポジトリでは ASCII にしてある。
+
+## スタックが ROLLBACK_COMPLETE のまま再デプロイできない
+
+CREATE に失敗したスタックは `ROLLBACK_COMPLETE` で残り、**そのままでは作り直せない**（CloudFormation の仕様）。再実行すると次のエラーになる。
+
+```
+Stack ... is in ROLLBACK_COMPLETE state and can not be updated.
+```
+
+削除してから作り直す。
+
+```bash
+aws cloudformation delete-stack --stack-name takeuchi-xacct-a-api \
+  --profile account-b --region ap-northeast-1
+aws cloudformation wait stack-delete-complete --stack-name takeuchi-xacct-a-api \
+  --profile account-b --region ap-northeast-1
+```
+
+`deploy.sh` はこの状態を検出して自動で削除してから進むため、通常は手動対応は不要。
+
 ## 403 が消えない: リソースポリシーの再デプロイ忘れ（方式A）
 
 REST API のリソースポリシーは、**変更しただけでは反映されない**。ステージへのデプロイが必要。

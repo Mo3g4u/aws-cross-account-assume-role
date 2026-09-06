@@ -77,6 +77,27 @@ stack_output() {
     --output text
 }
 
+# ensure_deployable <スタック名> <プロファイル>
+# CREATE に失敗したスタックは ROLLBACK_COMPLETE で残り、そのままでは作り直せない
+# （CloudFormation の仕様）。残っていたら削除してから進む。
+ensure_deployable() {
+  local stack="$1" profile="$2" status
+  status="$(aws cloudformation describe-stacks \
+    --stack-name "$stack" --profile "$profile" --region "$REGION" \
+    --query 'Stacks[0].StackStatus' --output text 2>/dev/null || true)"
+
+  case "$status" in
+    ROLLBACK_COMPLETE|ROLLBACK_FAILED)
+      echo "  ! $stack が $status です。作成をやり直せないため削除します..."
+      aws cloudformation delete-stack \
+        --stack-name "$stack" --profile "$profile" --region "$REGION"
+      aws cloudformation wait stack-delete-complete \
+        --stack-name "$stack" --profile "$profile" --region "$REGION"
+      echo "  削除しました。作成を続行します。"
+      ;;
+  esac
+}
+
 # print_banner <タイトル>  これから操作する対象を明示する
 print_banner() {
   echo "-----------------------------------------------------------"
